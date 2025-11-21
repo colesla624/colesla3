@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Lucid Dream Runner</title>
+<style>
+  :root {
+    --bg1: #0b1026;
+    --bg2: #1b2250;
+    --accent: #8a5cff;
+    --moon: #ffd46b;
+    --player: #61e1ff;
+    --glitch: #ff5c8a;
+    --text: #e9ecff;
+  }
+  html, body {
+    margin: 0; height: 100%; background: radial-gradient(1200px at 50% 20%, var(--bg2), var(--bg1));
+    color: var(--text); font-family: system-ui, -apple-system, Segoe UI, Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif;
+  }
+  .wrap {
+    display: grid; place-items: center; min-height: 100vh; padding: 16px;
+  }
+  .hud {
+    display: flex; gap: 16px; align-items: center; justify-content: center; margin-bottom: 8px;
+    font-weight: 600; font-size: 14px; text-shadow: 0 2px 10px rgba(0,0,0,0.5);
+  }
+  .btns { display: flex; gap: 8px; }
+  button {
+    background: linear-gradient(180deg, #2d3a7a, #202859);
+    color: var(--text); border: 1px solid #4450a8; border-radius: 8px; padding: 8px 12px;
+    cursor: pointer; box-shadow: 0 6px 20px rgba(0,0,0,0.35);
+  }
+  button:hover { filter: brightness(1.08); }
+  canvas {
+    width: min(92vw, 720px); height: min(60vh, 420px); max-width: 720px; max-height: 420px;
+    background: radial-gradient(600px at 60% 40%, rgba(138,92,255,0.15), rgba(0,0,0,0) 60%),
+                radial-gradient(900px at 30% 80%, rgba(255,212,107,0.12), rgba(0,0,0,0) 70%);
+    border: 1px solid #2b2f5c; border-radius: 16px; box-shadow: 0 20px 40px rgba(0,0,0,0.5), inset 0 0 30px rgba(255,255,255,0.05);
+  }
+  .tips {
+    margin-top: 10px; font-size: 12px; opacity: 0.85; text-align: center;
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="hud">
+    <div>Score: <span id="score">0</span></div>
+    <div>Lives: <span id="lives">3</span></div>
+    <div>Level: <span id="level">1</span></div>
+    <div class="btns">
+      <button id="startBtn">Start</button>
+      <button id="pauseBtn">Pause</button>
+      <button id="resetBtn">Reset</button>
+    </div>
+  </div>
+  <canvas id="game" width="720" height="420" aria-label="Lucid Dream Runner game"></canvas>
+  <div class="tips">Move with Arrow Keys or WASD. Collect moons, avoid glitches. Press Start to play.</div>
+</div>
+
+<script>
+(() => {
+  const canvas = document.getElementById("game");
+  const c = canvas.getContext("2d");
+  const scoreEl = document.getElementById("score");
+  const livesEl = document.getElementById("lives");
+  const levelEl = document.getElementById("level");
+  const startBtn = document.getElementById("startBtn");
+  const pauseBtn = document.getElementById("pauseBtn");
+  const resetBtn = document.getElementById("resetBtn");
+
+  const W = canvas.width, H = canvas.height;
+
+  // Game state
+  let running = false, paused = false, last = 0;
+  let score = 0, lives = 3, level = 1;
+  let t = 0;
+
+  const keys = { up:false, down:false, left:false, right:false };
+
+  const player = {
+    x: W * 0.15,
+    y: H * 0.5,
+    r: 14,
+    vx: 0,
+    vy: 0,
+    speed: 220,
+    drag: 0.88,
+  };
+
+  const moons = [];
+  const glitches = [];
+  const stars = [];
+
+  // Utility
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  const rnd = (min, max) => min + Math.random() * (max - min);
+
+  function spawnStar() {
+    stars.push({
+      x: rnd(0, W), y: rnd(0, H),
+      r: rnd(0.5, 1.8),
+      tw: rnd(0.002, 0.005),
+      phase: rnd(0, Math.PI * 2),
+    });
+  }
+  for (let i = 0; i < 160; i++) spawnStar();
+
+  function spawnMoon() {
+    moons.push({
+      x: rnd(W * 0.35, W * 0.95),
+      y: rnd(20, H - 20),
+      r: rnd(8, 12),
+      vx: rnd(-10, 10),
+      vy: rnd(-10, 10),
+      glow: rnd(0.4, 0.9),
+    });
+  }
+  function spawnGlitch() {
+    const size = rnd(12, 20);
+    glitches.push({
+      x: rnd(W * 0.4, W * 0.95),
+      y: rnd(20, H - 20),
+      w: size, h: size,
+      vx: rnd(-40, -10) - level * 6,
+      vy: rnd(-25, 25),
+      spin: rnd(-0.05, 0.05),
+      a: rnd(0, Math.PI * 2),
+    });
+  }
+
+  // Input
+  window.addEventListener("keydown", (e) => {
+    const k = e.key.toLowerCase();
+    if (k === "arrowup" || k === "w") keys.up = true;
+    if (k === "arrowdown" || k === "s") keys.down = true;
+    if (k === "arrowleft" || k === "a") keys.left = true;
+    if (k === "arrowright" || k === "d") keys.right = true;
+    if (k === "p") togglePause();
+  });
+  window.addEventListener("keyup", (e) => {
+    const k = e.key.toLowerCase();
+    if (k === "arrowup" || k === "w") keys.up = false;
+    if (k === "arrowdown" || k === "s") keys.down = false;
+    if (k === "arrowleft" || k === "a") keys.left = false;
+    if (k === "arrowright" || k === "d") keys.right = false;
+  });
+
+  // Buttons
+  startBtn.onclick = () => { if (!running) startGame(); paused = false; running = true; };
+  pauseBtn.onclick = () => togglePause();
+  resetBtn.onclick = () => resetGame();
+
+  function startGame() {
+    score = 0; lives = 3; level = 1;
+    moons.length = 0; glitches.length = 0;
+    for (let i = 0; i < 6; i++) spawnMoon();
+    for (let i = 0; i < 4; i++) spawnGlitch();
+    updateHUD();
+  }
+
+  function togglePause() { paused = !paused; }
+  function resetGame() {
+    running = false; paused = false;
+    player.x = W * 0.15; player.y = H * 0.5; player.vx = 0; player.vy = 0;
+    score = 0; lives = 3; level = 1;
+    moons.length = 0; glitches.length = 0;
+    updateHUD();
+  }
+
+  function updateHUD() {
+    scoreEl.textContent = Math.floor(score);
+    livesEl.textContent = lives;
+    levelEl.textContent = level;
+  }
+
+  // Collision helpers
+  function circleRectCollide(cx, cy, r, rx, ry, rw, rh) {
+    const nx = clamp(cx, rx, rx + rw);
+    const ny = clamp(cy, ry, ry + rh);
+    const dx = cx - nx, dy = cy - ny;
+    return (dx*dx + dy*dy) <= r*r;
+  }
+  function circleCircleCollide(ax, ay, ar, bx, by, br) {
+    const dx = ax - bx, dy = ay - by;
+    return (dx*dx + dy*dy) <= (ar + br) * (ar + br);
+  }
+
+  // Game loop
+  function loop(ts) {
+    const dt = Math.min(0.033, (ts - last) / 1000 || 0.016);
+    last = ts; t += dt;
+
+    // Draw background
+    c.clearRect(0, 0, W, H);
+    drawGradientSky();
+    drawStars();
+
+    if (running && !paused) {
+      updatePlayer(dt);
+      updateMoons(dt);
+      updateGlitches(dt);
+      maybeLevelUp();
+      updateHUD();
+    }
+
+    drawMoons();
+    drawGlitches();
+    drawPlayer();
+    drawUI();
+
+    requestAnimationFrame(loop);
+  }
+  requestAnimationFrame(loop);
+
+  // Rendering
+  function drawGradientSky() {
+    const g = c.createRadialGradient(W*0.5, H*0.4, 20, W*0.5, H*0.4, Math.max(W,H));
+    g.addColorStop(0, "rgba(138,92,255,0.20)");
+    g.addColorStop(0.5, "rgba(27,34,80,0.4)");
+    g.addColorStop(1, "rgba(11,16,38,1)");
+    c.fillStyle = g;
+    c.fillRect(0,0,W,H);
+  }
+
+  function drawStars() {
+    for (const s of stars) {
+      const tw = (Math.sin(t * 3 + s.phase) * 0.5 + 0.5) * s.tw + 0.002;
+      c.beginPath();
+      c.arc(s.x, s.y, s.r * (1 + tw * 10), 0, Math.PI*2);
+      c.fillStyle = "rgba(233,236,255,0.8)";
+      c.fill();
+    }
+  }
+
+  function drawPlayer() {
+    // Aura
+    c.beginPath();
+    c.arc(player.x, player.y, player.r + 16, 0, Math.PI*2);
+    c.fillStyle = "rgba(97,225,255,0.12)";
+    c.fill();
+
+    // Core
+    c.beginPath();
+    c.arc(player.x, player.y, player.r, 0, Math.PI*2);
+    const grad = c.createRadialGradient(player.x, player.y, 4, player.x, player.y, player.r);
+    grad.addColorStop(0, "#bdf4ff");
+    grad.addColorStop(1, "#61e1ff");
+    c.fillStyle = grad;
+    c.fill();
+
+    // Tail
+    c.strokeStyle = "rgba(97,225,255,0.35)";
+    c.lineWidth = 2;
+    c.beginPath();
+    c.moveTo(player.x - player.r, player.y);
+    c.quadraticCurveTo(player.x - player.r - 20, player.y + Math.sin(t*6)*8, player.x - player.r - 60, player.y + Math.cos(t*4)*6);
+    c.stroke();
+  }
+
+  function drawMoons() {
+    for (const m of moons) {
+      const glow = c.createRadialGradient(m.x, m.y, 2, m.x, m.y, m.r + 22);
+      glow.addColorStop(0, "rgba(255,212,107,0.35)");
+      glow.addColorStop(1, "rgba(255,212,107,0)");
+      c.fillStyle = glow; c.beginPath(); c.arc(m.x, m.y, m.r+18, 0, Math.PI*2); c.fill();
+
+      const grad = c.createRadialGradient(m.x - 3, m.y - 3, 2, m.x, m.y, m.r);
+      grad.addColorStop(0, "#fff4d6");
+      grad.addColorStop(1, "#ffd46b");
+      c.fillStyle = grad;
+      c.beginPath(); c.arc(m.x, m.y, m.r, 0, Math.PI*2); c.fill();
+
+      // Subtle crater lines
+      c.strokeStyle = "rgba(140,110,55,0.25)";
+      c.lineWidth = 1;
+      c.beginPath();
+      c.arc(m.x + 3, m.y + 2, m.r * 0.5, 0.2, 2.6);
+      c.stroke();
+    }
+  }
+
+  function drawGlitches() {
+    for (const gch of glitches) {
+      c.save();
+      c.translate(gch.x + gch.w/2, gch.y + gch.h/2);
+      c.rotate(gch.a);
+      c.fillStyle = "rgba(255,92,138,0.85)";
+      c.strokeStyle = "rgba(255,255,255,0.2)";
+      c.lineWidth = 2;
+      c.beginPath();
+      c.rect(-gch.w/2, -gch.h/2, gch.w, gch.h);
+      c.fill(); c.stroke();
+      // glitch scan lines
+      c.globalAlpha = 0.25;
+      c.beginPath(); c.rect(-gch.w/2, -gch.h/2, gch.w, 2); c.fill();
+      c.beginPath(); c.rect(-gch.w/2, gch.h/2 - 2, gch.w, 2); c.fill();
+      c.restore();
+    }
+  }
+
+  function drawUI() {
+    if (!running) {
+      c.fillStyle = "rgba(233,236,255,0.9)";
+      c.font = "600 24px system-ui";
+      c.textAlign = "center";
+      c.fillText("Lucid Dream Runner", W/2, H/2 - 20);
+      c.font = "400 14px system-ui";
+      c.fillText("Press Start. Move with Arrow Keys / WASD. Collect moons, avoid glitches.", W/2, H/2 + 10);
+    } else if (paused) {
+      c.fillStyle = "rgba(233,236,255,0.9)";
+      c.font = "700 22px system-ui";
+      c.textAlign = "center";
+      c.fillText("Paused", W/2, H/2);
+    } else if (lives <= 0) {
+      c.fillStyle = "rgba(233,236,255,0.95)";
+      c.font = "700 22px system-ui";
+      c.textAlign = "center";
+      c.fillText("You woke up!", W/2, H/2 - 10);
+      c.font = "400 14px system-ui";
+      c.fillText("Press Reset to try again.", W/2, H/2 + 16);
+    }
+  }
+
+  // Updates
+  function updatePlayer(dt) {
+    const accel = player.speed;
+    if (keys.up) player.vy -= accel * dt;
+    if (keys.down) player.vy += accel * dt;
+    if (keys.left) player.vx -= accel * dt;
+    if (keys.right) player.vx += accel * dt;
+
+    player.vx *= player.drag;
+    player.vy *= player.drag;
+
+    player.x += player.vx * dt;
+    player.y += player.vy * dt;
+
+    // Boundaries
+    player.x = clamp(player.x, player.r + 2, W - player.r - 2);
+    player.y = clamp(player.y, player.r + 2, H - player.r - 2);
+
+    // Collect moons
+    for (let i = moons.length - 1; i >= 0; i--) {
+      const m = moons[i];
+      if (circleCircleCollide(player.x, player.y, player.r, m.x, m.y, m.r)) {
+        score += 25;
+        moons.splice(i, 1);
+        spawnMoon();
+        // small heal every 3 moons
+        if (score % 75 === 0 && lives < 3) lives += 1;
+      }
+    }
+
+    // Hit glitches
+    for (let i = glitches.length - 1; i >= 0; i--) {
+      const gch = glitches[i];
+      if (circleRectCollide(player.x, player.y, player.r, gch.x, gch.y, gch.w, gch.h)) {
+        lives -= 1;
+        glitches.splice(i, 1);
+        spawnGlitch();
+        if (lives <= 0) { paused = false; running = true; } // keep drawing "game over" UI
+      }
+    }
+  }
+
+  function updateMoons(dt) {
+    for (const m of moons) {
+      m.x += m.vx * dt;
+      m.y += m.vy * dt;
+      // gentle drift and bounce
+      if (m.x < 20 || m.x > W - 20) m.vx *= -1;
+      if (m.y < 20 || m.y > H - 20) m.vy *= -1;
+    }
+  }
+
+  function updateGlitches(dt) {
+    for (const gch of glitches) {
+      gch.x += gch.vx * dt;
+      gch.y += gch.vy * dt;
+      gch.a += gch.spin;
+      if (gch.y < 10 || gch.y > H - 10) gch.vy *= -1;
+      // wrap left side
+      if (gch.x < -30) {
+        gch.x = W + rnd(0, 30);
+        gch.y = rnd(20, H - 20);
+        gch.vx = rnd(-40, -10) - level * 6;
+        gch.vy = rnd(-25, 25);
+      }
+    }
+  }
+
+  function maybeLevelUp() {
+    const nextLevelScore = level * 200;
+    if (score >= nextLevelScore) {
+      level += 1;
+      // increase difficulty
+      for (let i = 0; i < 2; i++) spawnGlitch();
+      if (level % 2 === 0) spawnMoon();
+    }
+  }
+})();
+</script>
+</body>
+</html>
